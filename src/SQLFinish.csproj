@@ -1,0 +1,43 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <!-- Build with Visual Studio's MSBuild (see build.ps1): the .vsct compiler is not part of the dotnet CLI. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SQLFinish</RootNamespace>
+    <AssemblyName>SQLFinish</AssemblyName>
+    <Version>1.5.0</Version>
+    <Nullable>disable</Nullable>
+    <DebugType>none</DebugType> <!-- no .pdb is shipped, and without this the DLL records the build machine's folder path -->
+
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodebase>true</UseCodebase>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <TargetVsixContainer>$(MSBuildThisFileDirectory)..\dist\SQLFinish.vsix</TargetVsixContainer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 17.x reference assemblies: SSMS 22 (shell 18.x) redirects them to its own. -->
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Design" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <VSCTCompile Include="SQLFinish.vsct" ResourceName="Menus.ctmenu" />
+    <None Include="source.extension.vsixmanifest" SubType="Designer" />
+  </ItemGroup>
+
+  <!-- Explicit SDK imports so the VSSDK targets (pkgdef, .vsct, .vsix) load after the C# ones. -->
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(VSToolsPath)' != ''" />
+</Project>

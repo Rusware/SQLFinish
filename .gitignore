@@ -1,0 +1,14 @@
+# build output
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# dist is rebuilt by build.ps1; only the installer people download is kept in the repository
+dist/*
+!dist/SQLFinish-Setup.zip
+
+# local assistant session notes
+.remember/
+.claude/

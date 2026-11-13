@@ -1,0 +1,60 @@
+using System;
+using System.Collections.Generic;
+
+namespace SQLFinish.Engine
+{
+    public static class Keywords
+    {
+        static HashSet<string> Set(string words) =>
+            new HashSet<string>(words.Split(new[] { ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>T-SQL reserved keywords: upper-cased by the formatter, never treated as a name.</summary>
+        public static readonly HashSet<string> Reserved = Set(@"
+ADD ALL ALTER AND ANY APPLY AS ASC AUTHORIZATION BACKUP BEGIN BETWEEN BREAK BROWSE BULK BY CASCADE CASE CATCH CHECK
+CHECKPOINT CLOSE CLUSTERED COALESCE COLLATE COLUMN COMMIT COMPUTE CONSTRAINT CONTAINS CONTAINSTABLE CONTINUE CONVERT
+CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DBCC DEALLOCATE DECLARE
+DEFAULT DELETE DENY DESC DISTINCT DISTRIBUTED DOUBLE DROP ELSE END ERRLVL ESCAPE EXCEPT EXEC EXECUTE EXISTS EXIT
+EXTERNAL FETCH FILE FILLFACTOR FOR FOREIGN FREETEXT FREETEXTTABLE FROM FULL FUNCTION GO GOTO GRANT GROUP HAVING
+HOLDLOCK IDENTITY IDENTITY_INSERT IDENTITYCOL IF IN INDEX INNER INSERT INTERSECT INTO IS JOIN KEY KILL LEFT LIKE
+LINENO MERGE NATIONAL NOCHECK NONCLUSTERED NOT NULL NULLIF OF OFF OFFSETS ON OPEN OPENDATASOURCE OPENQUERY OPENROWSET
+OPENXML OPTION OR ORDER OUTER OUTPUT OVER PERCENT PIVOT PLAN PRIMARY PRINT PROC PROCEDURE PUBLIC RAISERROR READ
+READTEXT RECONFIGURE REFERENCES REPLICATION RESTORE RESTRICT RETURN RETURNS REVERT REVOKE RIGHT ROLLBACK ROWCOUNT
+ROWGUIDCOL RULE SAVE SCHEMA SELECT SESSION_USER SET SETUSER SHUTDOWN SOME STATISTICS SYSTEM_USER TABLE TABLESAMPLE
+THEN THROW TO TOP TRAN TRANSACTION TRIGGER TRUNCATE TRY TRY_CONVERT TSEQUAL UNION UNIQUE UNPIVOT UPDATE UPDATETEXT
+USE USER USING VALUES VARYING VIEW WAITFOR WHEN WHERE WHILE WITH WITHIN WRITETEXT");
+
+        /// <summary>Reserved words that are called like functions, so no space goes before their "(".</summary>
+        public static readonly HashSet<string> CallLike = Set(
+            "COALESCE NULLIF CONVERT TRY_CONVERT LEFT RIGHT CONTAINS FREETEXT CONTAINSTABLE FREETEXTTABLE OPENROWSET OPENQUERY OPENXML OPENDATASOURCE IDENTITY");
+
+        /// <summary>Built-in functions offered in expression positions.</summary>
+        public static readonly string[] Functions = @"
+ABS AVG CAST CEILING CHARINDEX CHOOSE COALESCE CONCAT CONCAT_WS CONVERT COUNT COUNT_BIG DATALENGTH DATEADD DATEDIFF
+DATEFROMPARTS DATENAME DATEPART DAY DB_NAME DENSE_RANK EOMONTH FIRST_VALUE FLOOR FORMAT GETDATE GETUTCDATE IIF ISNULL
+ISNUMERIC LAG LAST_VALUE LEAD LEFT LEN LOWER LTRIM MAX MIN MONTH NEWID NTILE NULLIF OBJECT_ID OBJECT_NAME PATINDEX
+RANK REPLACE REPLICATE REVERSE RIGHT ROUND ROW_NUMBER RTRIM SCOPE_IDENTITY STRING_AGG STRING_SPLIT STUFF SUBSTRING SUM
+SYSDATETIME SYSUTCDATETIME TRIM TRY_CAST TRY_CONVERT UPPER YEAR".Split(new[] { ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+        /// <summary>What can follow a table or a finished condition, offered ahead of the single keywords.</summary>
+        public static readonly string[] Clauses =
+        {
+            "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "CROSS APPLY", "OUTER APPLY",
+            "WHERE", "GROUP BY", "HAVING", "ORDER BY",
+        };
+
+        /// <summary>Statement-level snippets: typed shortcut, expansion.</summary>
+        public static readonly string[][] Snippets =
+        {
+            new[] { "ssf", "SELECT * FROM " },
+            new[] { "st100", "SELECT TOP 100 * FROM " },
+            new[] { "scf", "SELECT COUNT(*) FROM " },
+            new[] { "ii", "INSERT INTO " },
+            new[] { "df", "DELETE FROM " },
+            new[] { "bt", "BEGIN TRAN\r\n\r\nROLLBACK" },
+            new[] { "be", "BEGIN\r\n    \r\nEND" },
+            new[] { "tc", "BEGIN TRY\r\n    \r\nEND TRY\r\nBEGIN CATCH\r\n    THROW;\r\nEND CATCH" },
+            new[] { "ct", "CREATE TABLE " },
+            new[] { "cp", "CREATE OR ALTER PROCEDURE " },
+        };
+    }
+}
