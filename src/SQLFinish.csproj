@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SQLFinish</RootNamespace>
     <AssemblyName>SQLFinish</AssemblyName>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType> <!-- no .pdb is shipped, and without this the DLL records the build machine's folder path -->
 
@@ -26,6 +26,8 @@
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
+    <Reference Include="System.IO.Compression" /> <!-- the .xlsx container is a zip -->
+    <Reference Include="System.Windows.Forms" />  <!-- SSMS's results grid is a Windows Forms control -->
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />

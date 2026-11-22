@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Reflection;
@@ -18,9 +19,20 @@ namespace SQLFinish.Vs
         public Func<string, IDbConnection> Open; // opens a new connection on the given database
     }
 
+    /// <summary>The rows behind a results grid. Rows and columns count from 0.</summary>
+    internal sealed class ResultGrid
+    {
+        public List<XlsxColumn> Columns;
+        public long Rows;
+        public bool Complete;                // false while the query is still filling the grid
+        public Func<long, int, object> Value; // the stored value: a SqlTypes value for most columns, null for NULL
+        public Func<long, int, string> Text;  // the same cell as SSMS shows it
+    }
+
     /// <summary>
     /// The only place that touches SSMS's own assemblies. They are not a supported extension API, so they
-    /// are reached by reflection: a renamed member costs us schema suggestions, never a crash or a failed load.
+    /// are reached by reflection: a renamed member costs us schema suggestions or the Excel export, never a
+    /// crash or a failed load.
     /// </summary>
     internal static class Ssms
     {
@@ -68,6 +80,56 @@ namespace SQLFinish.Vs
             catch (Exception e)
             {
                 Log("could not read the query window's connection", e);
+                return null;
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern IntPtr GetFocus();
+
+        /// <summary>
+        /// The result set of the results grid that has the keyboard focus (the one that was right-clicked),
+        /// or null when the focus is anywhere else. SSMS finds the grid for its own "Save Results As" the
+        /// same way. UI thread only.
+        /// </summary>
+        public static ResultGrid FocusedResults()
+        {
+            try
+            {
+                object storage = null;
+                for (var control = System.Windows.Forms.Control.FromChildHandle(GetFocus()); control != null && storage == null; control = control.Parent)
+                    storage = control.GetType().GetProperty("GridStorage")?.GetValue(control);
+                // Other grids (client statistics, template parameters) have a storage that is not a result set.
+                var results = storage?.GetType().GetInterface("Microsoft.SqlServer.Management.QueryExecution.IGridResultSet");
+                if (results == null) return null;
+
+                var type = storage.GetType();
+                var names = (System.Collections.Specialized.StringCollection)results.GetProperty("ColumnNames").GetValue(storage);
+                var schemaRow = results.GetMethod("GetSchemaRow");
+                var columns = new List<XlsxColumn>();
+                for (int i = 0; i < names.Count; i++)
+                {
+                    var row = (DataRow)schemaRow.Invoke(storage, new object[] { i });
+                    Func<string, object> field = name => row.Table.Columns.Contains(name) && !row.IsNull(name) ? row[name] : null;
+                    columns.Add(new XlsxColumn { Name = names[i], SqlType = field("DataTypeName") as string, Scale = Convert.ToInt32(field("NumericScale") ?? 0) });
+                }
+
+                // In a grid the storage's column 0 is the row-number column.
+                int first = (type.GetProperty("GridMode")?.GetValue(storage) as bool? ?? true) ? 1 : 0;
+                var value = (Func<long, int, object>)Delegate.CreateDelegate(typeof(Func<long, int, object>), storage, results.GetMethod("GetCellData"));
+                var text = (Func<long, int, string>)Delegate.CreateDelegate(typeof(Func<long, int, string>), storage, results.GetMethod("GetCellDataAsString"));
+                return new ResultGrid
+                {
+                    Columns = columns,
+                    Rows = (long)type.GetMethod("NumRows", Type.EmptyTypes).Invoke(storage, null),
+                    Complete = type.GetProperty("StoredAllData")?.GetValue(storage) as bool? ?? true,
+                    Value = (r, c) => value(r, c + first),
+                    Text = (r, c) => text(r, c + first),
+                };
+            }
+            catch (Exception e)
+            {
+                Log("could not read the results grid", e);
                 return null;
             }
         }

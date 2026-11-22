@@ -53,6 +53,16 @@
           <LocCanonicalName>SQLFinish.OpenDefinition</LocCanonicalName>
         </Strings>
       </Button>
+      <!-- In the results grid's right-click menu, straight after SSMS's own "Save Results As..." (priority 0x0100 in that group). -->
+      <Button guid="guidCommandSet" id="cmdExportExcel" priority="0x0101" type="Button">
+        <Parent guid="guidSqlEditorMenus" id="SaveResultsGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>E&amp;xport to Excel...</ButtonText>
+          <LocCanonicalName>SQLFinish.ExportToExcel</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidCommandSet" id="cmdRefresh" priority="0x0200" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
         <Strings>
@@ -83,6 +93,11 @@
       <IDSymbol name="cmdPickColumns" value="0x0102" />
       <IDSymbol name="cmdHistory" value="0x0103" />
       <IDSymbol name="cmdDefinition" value="0x0104" />
+      <IDSymbol name="cmdExportExcel" value="0x0105" />
+    </GuidSymbol>
+    <!-- SSMS's own SQL editor menus (SQLEditors.dll). Not a documented contract: if the group is ever renumbered the menu item is simply not shown. -->
+    <GuidSymbol name="guidSqlEditorMenus" value="{33F13AC3-80BB-4ECB-85BC-225435603A5E}">
+      <IDSymbol name="SaveResultsGroup" value="0x00B0" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

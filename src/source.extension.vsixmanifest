@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="SQLFinish.8a8fc69c-607f-434c-a7ed-9ebc1d8255d6" Version="1.5.0" Language="en-US" Publisher="SQLFinish" />
+    <Identity Id="SQLFinish.8a8fc69c-607f-434c-a7ed-9ebc1d8255d6" Version="1.6.0" Language="en-US" Publisher="SQLFinish" />
     <DisplayName>SQLFinish</DisplayName>
     <Description xml:space="preserve">SQL completion, formatting and snippets for SQL Server Management Studio.</Description>
     <Tags>SQL, T-SQL, completion, formatter, snippets</Tags>

@@ -2,7 +2,7 @@
 
 <h1 align="center"><img src="assets/logo.png" alt="" width="88"><br>SQLFinish</h1>
 
-<p align="center">Fast SQL completion, query building, formatting and query history for SQL Server Management Studio 22.10 or later.<br>Free, small, and it stays on your machine.</p>
+<p align="center">Fast SQL completion, query building, formatting, query history and Excel export for SQL Server Management Studio 22.10 or later.<br>Free, small, and it stays on your machine.</p>
 
 <table>
   <tr>
@@ -33,7 +33,7 @@ That is a lot to pay, for every seat on a team, to have `FROM Orders o JOIN` fin
 
 SQLFinish is the small version. It does the handful of things that save keystrokes all day and stops there:
 
-- one DLL of about 100 KB, with no account, licence key or trial period;
+- one DLL of about 125 KB, with no account, licence key or trial period;
 - no telemetry and no network calls of its own: it reads the catalog over the connection your query window already has, and writes only to your own profile folder;
 - source you can read in an afternoon, and change when it does not suit you.
 
@@ -89,13 +89,37 @@ Every script you execute is remembered with its time, server and database, so th
 
 Shortcuts can be changed under Tools > Options > Environment > Keyboard, where the commands are listed as `Tools.FormatSQL`, `Tools.PickColumns`, `Tools.QueryHistory`, `Tools.OpenDefinition` and `Tools.RefreshSuggestions`.
 
+### Export results to Excel
+
+Right-click a results grid and choose **Export to Excel...**, straight under SSMS's own Save Results As. The whole grid is saved as an `.xlsx` workbook, wherever you say, and opened.
+
+- **The header row** is bold white on dark blue, stays in view as you scroll, and has the filter switched on.
+- **Every column is formatted for its SQL type**, so Excel sorts, filters and sums it properly:
+
+  | SQL type | In Excel |
+  | --- | --- |
+  | `tinyint`, `smallint`, `int`, `bigint` | whole numbers |
+  | `decimal`, `numeric` | numbers with the column's own scale (`decimal(10,2)` shows `12.50`) |
+  | `money`, `smallmoney` | numbers with thousands separators (`1,234,567.89`) |
+  | `float`, `real` | numbers |
+  | `date`, `datetime`, `datetime2`, `smalldatetime` | real dates, shown as `yyyy-mm-dd` with the time where the type has one |
+  | `time` | times |
+  | `bit` | `TRUE` / `FALSE` |
+  | everything else | text, as SSMS shows it |
+
+- **`NULL` is an empty cell**, not the word NULL.
+- **Nothing is silently changed.** Excel keeps 15 significant digits and has no dates before March 1900, so a longer `bigint` or `decimal`, an earlier date, and `datetimeoffset` are written as text, exactly as SSMS shows them.
+- **Excel's own limits apply**: 1,048,575 rows and 32,767 characters in a cell. The status bar says so when a result was cut to fit.
+
+It writes the file itself: Excel does not need to be installed to export, only to open the result.
+
 ### <img src="assets/icon-guard.png" alt="" width="28" align="top"> Execute guard
 
 Running a script (F5) that has an `UPDATE` or `DELETE` with no `WHERE` asks first, listing each one with its line. "No" is the default answer. Temp tables and table variables are exempt.
 
 ## <img src="assets/icon-privacy.png" alt="" width="28" align="top"> Privacy
 
-SQLFinish has no telemetry, no update check and no network code. It talks to SQL Server only, through a connection opened with the credentials of the query window you are typing in, to read catalog views and object definitions. It writes to two places, both in your Windows profile: the query history folder above, and the log below.
+SQLFinish has no telemetry, no update check and no network code. It talks to SQL Server only, through a connection opened with the credentials of the query window you are typing in, to read catalog views and object definitions. It writes to two places of its own, both in your Windows profile: the query history folder above, and the log below. An exported workbook goes where you save it and nowhere else.
 
 ## Troubleshooting
 
@@ -113,7 +137,8 @@ The log names servers, databases and columns. Read it before attaching it to a p
 - Statements are separated on `;` and `GO` only, so unterminated neighbouring statements share one alias scope.
 - Open Definition shows the source as SQL Server stores it, so an object renamed with `sp_rename` still carries its old name in the script.
 - One fixed formatting style (4 spaces, upper-case keywords, one select item per line).
-- It reaches the query window's connection through SSMS internals that are not a supported extension API. An SSMS update can break that; the result is a keywords-only list and a line in the log, not a crash.
+- Export to Excel writes the whole grid, not the selection, and one grid at a time. Dates and times are kept to the millisecond, the finest Excel shows. Column widths are sized from the first 200 rows.
+- It reaches the query window's connection, the results grid and its right-click menu through SSMS internals that are not a supported extension API. An SSMS update can break that; the result is a keywords-only list or a missing menu item, and a line in the log, not a crash.
 
 ## <img src="assets/icon-roadmap.png" alt="" width="28" align="top"> Roadmap
 
@@ -121,10 +146,10 @@ Proposals through the end of 2027, in the order they are most likely to be built
 
 | When | Version | Proposed |
 | --- | --- | --- |
-| Q4 2026 | 1.6 | **History you can manage**: delete an entry or clear everything from the history window, filter by server or database, and pin scripts you reuse so pruning never removes them. Tagged GitHub Releases with the installer attached. |
-| Q1 2027 | 1.7 | **Columns from everywhere**: CTEs, derived tables, temp tables and table variables. Statement boundaries found without `;` or `GO`. |
-| Q2 2027 | 1.8 | **Options page** (Tools > Options > SQLFinish): switch features on and off, history size and exclusions (for example, never record scripts run against a named server), and formatting style (indent, keyword case, comma placement). **Your own snippets**, read from a file. |
-| Q3 2027 | 1.9 | **More query building**: `INSERT` with its column list and a matching `VALUES` row, `EXEC` with the procedure's parameters, and join suggestions learned from the joins already in your history. **Column details** (type, nullability, key) beside each suggestion. Open Definition for tables. |
+| Q4 2026 | 1.7 | **History you can manage**: delete an entry or clear everything from the history window, filter by server or database, and pin scripts you reuse so pruning never removes them. Tagged GitHub Releases with the installer attached. |
+| Q1 2027 | 1.8 | **Columns from everywhere**: CTEs, derived tables, temp tables and table variables. Statement boundaries found without `;` or `GO`. |
+| Q2 2027 | 1.9 | **Options page** (Tools > Options > SQLFinish): switch features on and off, history size and exclusions (for example, never record scripts run against a named server), and formatting style (indent, keyword case, comma placement). **Your own snippets**, read from a file. |
+| Q3 2027 | 1.10 | **More query building**: `INSERT` with its column list and a matching `VALUES` row, `EXEC` with the procedure's parameters, and join suggestions learned from the joins already in your history. **Column details** (type, nullability, key) beside each suggestion. Open Definition for tables. |
 | Q4 2027 | 2.0 | **Wider guard**: `TRUNCATE`, `DROP`, and a confirmation for servers you mark as production. **History with results**: how long each script ran and how many rows it affected. Find any object in the catalog by name. |
 
 Not planned: telemetry, accounts, cloud sync, or anything that sends a script off your machine.
@@ -133,6 +158,7 @@ Not planned: telemetry, accounts, cloud sync, or anything that sends a script of
 
 | Version | What changed |
 | --- | --- |
+| 1.6 | Export to Excel from the results grid's right-click menu: a coloured, frozen header row with the filter on, and every column formatted for its SQL type. |
 | 1.5 | The next clause is offered after an aliased table, and the join condition after a joined table. Join conditions are guessed from column names when there are no foreign keys. Columns are found by their own name when alias-qualified. One-file installer. |
 | 1.4 | Query History. Open Definition on F12. The column list opens on the space after `ORDER BY`, `WHERE` and friends. Picked columns are laid out by the formatter. The menu moved to Tools > SQLFinish, where SSMS 22 actually shows it. |
 | 1.3 | Tab after `*` re-formats the statement, one column per line. |
@@ -145,8 +171,8 @@ Not planned: telemetry, accounts, cloud sync, or anything that sends a script of
 `.\build.ps1` runs the engine self-check, then writes `dist\SQLFinish.vsix` and `dist\SQLFinish-Setup.zip` (the vsix with its install script). Commit the zip to publish a new version: it is the only file under `dist` that is tracked.
 Needs the .NET SDK and Visual Studio's MSBuild (any edition; the VS SDK workload is not required).
 
-- `src\Engine` - tokenizer, formatter, completion, catalog query, history. Plain C#, no SSMS dependencies.
-- `src\Vs` - the SSMS side: completion source (MEF), menu package, dialogs, and `Ssms.cs`, the one file that reaches into SSMS's own assemblies (by reflection) for the query window's connection.
+- `src\Engine` - tokenizer, formatter, completion, catalog query, history, Excel writer. Plain C#, no SSMS dependencies.
+- `src\Vs` - the SSMS side: completion source (MEF), menu package, dialogs, and `Ssms.cs`, the one file that reaches into SSMS's own assemblies (by reflection) for the query window's connection and the results grid.
 - `check` - `dotnet run --project check`: asserts on the engine, plus the catalog queries against LocalDB when present.
 
 Bug reports are most useful with the SSMS version (Help > About) and the statement you were typing, with the caret position marked.

@@ -2,7 +2,12 @@
 // Exits non-zero if the formatter, completion or the live catalog query misbehave.
 using System;
 using System.Collections.Generic;
+using System.Data.SqlTypes;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Xml.Linq;
 using Microsoft.Data.SqlClient;
 using SQLFinish.Engine;
 
@@ -28,6 +33,7 @@ static class Program
     {
         FormatterChecks();
         CompletionChecks();
+        XlsxChecks();
         LiveCatalogCheck();
         Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
@@ -372,6 +378,62 @@ END",
         Check(Completion.AliasFor("Orders", new[] { "o" }) == "o2", "alias avoids ones in use");
         Check(Completion.AliasFor("OrderNotes", new string[0]) == "on2", "alias avoids keywords");
         Check(Completion.DatabaseAt("USE Shop\nGO\nSELECT 1", 20) == "Shop", "USE sets the database");
+    }
+
+    /// <summary>Writes a small workbook and reads its parts back.</summary>
+    static void XlsxChecks()
+    {
+        var columns = new[] { "Id:int", "Big:bigint", "Amount:decimal:2", "Price:money:4", "Ratio:float", "Day:date", "Changed:datetime:3", "At:time:7", "Active:bit", "Note <&>:nvarchar", "Any:sql_variant" }
+            .Select(c => c.Split(':')).Select(p => new XlsxColumn { Name = p[0], SqlType = p[1], Scale = p.Length > 2 ? int.Parse(p[2]) : 0 }).ToList();
+        var noon = new DateTime(2026, 11, 13, 12, 0, 0); // day 46339 in Excel
+        object[][] data =
+        {
+            new object[] { new SqlInt32(1), new SqlInt64(42), new SqlDecimal(12.50m), new SqlMoney(3.5m), new SqlDouble(0.1), noon.Date, new SqlDateTime(noon), new TimeSpan(6, 0, 0).Add(TimeSpan.FromTicks(9999)), SqlBoolean.True, "a<b & _x0041_ c\r\nd" + (char)1, noon.AddTicks(9999) },
+            new object[] { SqlInt32.Null, new SqlInt64(1234567890123456), new SqlDecimal(1234567890.123456789m), null, DBNull.Value, new DateTime(1850, 1, 2), null, null, SqlBoolean.False, new string('x', Xlsx.MaxCellChars + 5), "text" },
+        };
+        Func<long, int, string> text = (r, c) => data[r][c] is DateTime d ? d.ToString("yyyy-MM-dd") : Convert.ToString(data[r][c], CultureInfo.InvariantCulture);
+
+        var parts = new Dictionary<string, string>();
+        using (var stream = new MemoryStream())
+        {
+            long rows = Xlsx.Write(stream, columns, data.Length, (r, c) => data[r][c], text, out int truncated);
+            Check(rows == 2 && truncated == 1, "xlsx: both rows are written and the over-long cell is counted");
+            stream.Position = 0;
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+                foreach (var entry in zip.Entries)
+                    using (var reader = new StreamReader(entry.Open()))
+                    {
+                        parts[entry.FullName] = reader.ReadToEnd();
+                        try { XDocument.Parse(parts[entry.FullName]); }
+                        catch (System.Xml.XmlException e) { Check(false, "xlsx: " + entry.FullName + " is not well-formed XML: " + e.Message); }
+                    }
+        }
+        Check(string.Join(",", parts.Keys.OrderBy(k => k, StringComparer.Ordinal)) == "[Content_Types].xml,_rels/.rels,xl/_rels/workbook.xml.rels,xl/styles.xml,xl/workbook.xml,xl/worksheets/sheet1.xml", "xlsx: the workbook has its six parts");
+        string sheet = parts["xl/worksheets/sheet1.xml"], styles = parts["xl/styles.xml"];
+        Func<string, bool> has = xml => sheet.Contains(xml);
+        Func<string, string> cellText = reference => "<c r=\"" + reference + "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">";
+
+        Check(has("<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>"), "xlsx: the header row is frozen");
+        Check(has("<autoFilter ref=\"A1:K3\"/>"), "xlsx: the filter covers the header and every row");
+        Check(has("<c r=\"A1\" s=\"1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">Id</t>") && has(">Note &lt;&amp;&gt;</t>"), "xlsx: headings use the header style and are escaped");
+        Check(styles.Contains("<fgColor rgb=\"FF1F4E78\"/>") && styles.Contains("<b/>"), "xlsx: the header style is bold on a coloured fill");
+        Check(styles.Contains("numFmtId=\"164\" formatCode=\"0\"") && styles.Contains("numFmtId=\"165\" formatCode=\"0.00\"") && styles.Contains("formatCode=\"yyyy-mm-dd\""), "xlsx: one number format per column type");
+        Check(has("<col min=\"3\" max=\"3\" width=\"22\" style=\"3\" customWidth=\"1\"/>"), "xlsx: columns carry their width and format");
+
+        Check(has("<c r=\"A2\" s=\"2\"><v>1</v></c>") && has("<c r=\"B2\" s=\"2\"><v>42</v></c>"), "xlsx: integers are numbers");
+        Check(has("<c r=\"C2\" s=\"3\"><v>12.50</v></c>") && has("<c r=\"D2\" s=\"4\"><v>3.5000</v></c>") && has("<c r=\"E2\"><v>0.1</v></c>"), "xlsx: decimal, money and float are numbers");
+        Check(has("<c r=\"F2\" s=\"5\"><v>46339</v></c>") && has("<c r=\"G2\" s=\"6\"><v>46339.5</v></c>") && has("<c r=\"H2\" s=\"7\"><v>0.25</v></c>"), "xlsx: date, datetime and time are Excel dates, cut to the millisecond");
+        Check(has("<c r=\"I2\" t=\"b\"><v>1</v></c>") && has("<c r=\"I3\" t=\"b\"><v>0</v></c>"), "xlsx: bit is a boolean");
+        Check(has(cellText("J2") + "a&lt;b &amp; _x005F_x0041_ c\nd_x0001_</t>"), "xlsx: text is escaped, CRLF becomes a line break, control characters use Excel's escape");
+        Check(has("<c r=\"K2\" s=\"6\"><v>46339.5</v></c>") && has(cellText("K3") + "text</t>"), "xlsx: a date in an untyped column still gets a date format");
+
+        Check(!has("r=\"A3\"") && !has("r=\"D3\"") && !has("r=\"E3\"") && !has("r=\"G3\""), "xlsx: NULL is an empty cell");
+        Check(has(cellText("B3") + "1234567890123456</t>") && has(cellText("C3") + "1234567890.123456789</t>"), "xlsx: numbers beyond Excel's 15 digits are kept exactly, as text");
+        Check(has(cellText("F3") + "1850-01-02</t>"), "xlsx: a date before 1900 is text");
+        Check(has(cellText("J3") + new string('x', Xlsx.MaxCellChars) + "</t>"), "xlsx: text is cut at Excel's cell limit");
+
+        Check(Xlsx.Format("DECIMAL", 0) == "0" && Xlsx.Format("numeric", 4) == "0.0000" && Xlsx.Format("datetime2", 0) == "yyyy-mm-dd hh:mm:ss" && Xlsx.Format("time", 0) == "hh:mm:ss", "xlsx: formats follow the scale");
+        Check(Xlsx.Format("nvarchar", 0) == null && Xlsx.Format("uniqueidentifier", 0) == null && Xlsx.Format(null, 0) == null, "xlsx: other types are left as General");
     }
 
     /// <summary>Runs the real catalog query against LocalDB, if there is one.</summary>

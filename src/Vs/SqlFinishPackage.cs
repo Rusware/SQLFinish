@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.Design;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.VisualStudio;
@@ -17,7 +18,7 @@ namespace SQLFinish.Vs
 {
     /// <summary>Hosts the SQLFinish menu. Completion needs no package: it is a MEF part (CompletionSource.cs).</summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("SQLFinish", "SQL completion, formatting and snippets for SQL Server Management Studio.", "1.5.0")]
+    [InstalledProductRegistration("SQLFinish", "SQL completion, formatting and snippets for SQL Server Management Studio.", "1.6.0")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     [ProvideAutoLoad(VSConstants.UICONTEXT.ShellInitialized_string, PackageAutoLoadFlags.BackgroundLoad)] // the Execute guard must be in place before the first query runs
     [Guid(PackageGuid)]
@@ -26,7 +27,7 @@ namespace SQLFinish.Vs
         // Keep in step with SQLFinish.vsct.
         public const string PackageGuid = "7047c1ca-53e4-4ce3-9d2e-b18c1d8ae74d";
         static readonly Guid CommandSet = new Guid("8cbfe379-0252-43d9-9606-626c4a633c94");
-        const int FormatCommand = 0x0100, RefreshCommand = 0x0101, PickColumnsCommand = 0x0102, HistoryCommand = 0x0103, DefinitionCommand = 0x0104;
+        const int FormatCommand = 0x0100, RefreshCommand = 0x0101, PickColumnsCommand = 0x0102, HistoryCommand = 0x0103, DefinitionCommand = 0x0104, ExportCommand = 0x0105;
         EnvDTE.CommandEvents executeEvents; // held so the event subscription stays alive
         string lastRemembered;              // so pressing F5 again on the same script adds nothing to the history
 
@@ -53,6 +54,11 @@ namespace SQLFinish.Vs
                 SchemaCache.Clear();
                 Status("SQLFinish: suggestions will be reloaded from the database.");
             }, new CommandID(CommandSet, RefreshCommand)));
+
+            // Shown in the results grid's own right-click menu, under "Save Results As...", while a grid with rows has the focus.
+            var export = new OleMenuCommand((s, e) => ExportToExcel(), new CommandID(CommandSet, ExportCommand));
+            export.BeforeQueryStatus += (s, e) => export.Visible = export.Enabled = Ssms.FocusedResults()?.Rows > 0;
+            commands.AddCommand(export);
 
             try
             {
@@ -145,6 +151,72 @@ namespace SQLFinish.Vs
                 else if (module.Text == null) Status("SQLFinish: " + shown + " has no source to open (only procedures, views, functions and triggers do, unless encrypted).");
                 else NewQuery(Definition.ModifyScript(module), module.Schema + "." + module.Name);
             }).FileAndForget("SQLFinish/OpenDefinition");
+#pragma warning restore VSSDK007
+        }
+
+        /// <summary>
+        /// Saves the results grid that has the focus as an Excel workbook and opens it. The whole grid is
+        /// written, as "Save Results As" does, whatever is selected in it.
+        /// </summary>
+        void ExportToExcel()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var grid = Ssms.FocusedResults();
+            if (grid == null || grid.Rows == 0 || !grid.Complete)
+            {
+                Status(grid != null && !grid.Complete ? "SQLFinish: wait for the query to finish, then export." : "SQLFinish: click in a results grid with rows first.");
+                return;
+            }
+            string name = null;
+            try { name = Path.GetFileNameWithoutExtension(((EnvDTE.DTE)GetService(typeof(EnvDTE.DTE)))?.ActiveDocument?.Name); }
+            catch (COMException) { } // no document to name the file after
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Export to Excel", Filter = "Excel workbook (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
+                FileName = string.IsNullOrEmpty(name) ? "Results" : name,
+            };
+            if (dialog.ShowDialog() != true) return;
+            string path = dialog.FileName;
+            Status("SQLFinish: exporting " + grid.Rows.ToString("N0") + " rows to " + path + "...");
+#pragma warning disable VSSDK007 // fire and forget: a large grid is written off the UI thread so SSMS stays usable
+            JoinableTaskFactory.RunAsync(async () =>
+            {
+                long rows;
+                int truncated = 0;
+                try
+                {
+                    rows = await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        // Written beside the target and moved over it at the end: a failed export never leaves a broken workbook.
+                        string temp = path + ".tmp";
+                        try
+                        {
+                            long written;
+                            using (var file = File.Create(temp)) written = Xlsx.Write(file, grid.Columns, grid.Rows, grid.Value, grid.Text, out truncated);
+                            File.Delete(path);
+                            File.Move(temp, path);
+                            return written;
+                        }
+                        finally
+                        {
+                            File.Delete(temp);
+                        }
+                    });
+                }
+                catch (Exception e)
+                {
+                    Ssms.Log("could not export the results to " + path, e);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    VsShellUtilities.ShowMessageBox(this, "The results were not exported to " + path + ".\n\n" + e.Message,
+                        "SQLFinish", OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                    return;
+                }
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                Status("SQLFinish: exported " + (rows < grid.Rows ? "the first " + rows.ToString("N0") + " of " + grid.Rows.ToString("N0") + " rows (Excel's limit)" : rows.ToString("N0") + " rows")
+                    + " to " + path + (truncated > 0 ? "; " + truncated.ToString("N0") + " cells were cut at Excel's limit of 32,767 characters." : "."));
+                try { System.Diagnostics.Process.Start(path); }
+                catch (System.ComponentModel.Win32Exception) { } // nothing installed opens .xlsx: the status bar says where the file is
+            }).FileAndForget("SQLFinish/ExportToExcel");
 #pragma warning restore VSSDK007
         }
 
