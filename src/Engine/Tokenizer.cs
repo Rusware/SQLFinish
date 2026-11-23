@@ -121,6 +121,69 @@ namespace SQLFinish.Engine
             return list;
         }
 
+        // A blank line before one of these is a gap inside a statement, not the end of it.
+        static readonly HashSet<string> Continues = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "FROM", "WHERE", "GROUP", "ORDER", "HAVING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "OUTER", "JOIN", "ON", "AND", "OR",
+            "UNION", "EXCEPT", "INTERSECT", "INTO", "VALUES", "OPTION",
+        };
+
+        /// <summary>
+        /// The span of the statement around <paramref name="position"/>. Statements end at ";" and GO and,
+        /// to forgive a forgotten ";", at a blank line (when <paramref name="blankLines"/>) that is outside
+        /// parentheses and not followed by the next clause of the same statement. A position after such a
+        /// blank line belongs to the statement that follows it.
+        /// </summary>
+        // ponytail: a heuristic, not a parser. Unterminated statements with no blank line between them are
+        // still one statement; split on statement keywords too if that ever matters.
+        public static void StatementAt(List<Tok> all, int position, out int start, out int end)
+        {
+            start = 0;
+            end = all.Count == 0 ? 0 : all[all.Count - 1].End;
+            int depth = 0;
+            Tok last = null;                           // the code token before the gap being read
+            bool blank = false, blankBefore = false;   // a blank line in that gap: anywhere / ahead of the position
+            // After a comma or an operator the statement is plainly not over: a blank line there only groups a long list.
+            Func<bool> ended = () => BlankLineEndsStatement && depth == 0 && last != null && (last.Type != TokType.Punct || last.IsP(")"));
+            foreach (var t in all)
+            {
+                if (t.Type == TokType.Ws)
+                {
+                    blank |= Newlines(t.Text, t.Text.Length) > 1;
+                    blankBefore |= Newlines(t.Text, Math.Min(t.Text.Length, position - t.Start)) > 1;
+                    continue;
+                }
+                if (t.Type == TokType.Comment) continue;
+
+                if (blank && ended() && !(t.Type == TokType.Word && Continues.Contains(t.Text)))
+                {
+                    if (blankBefore) start = t.Start;
+                    else { end = last.End; return; }
+                }
+                if (t.IsP(";") || t.Is("GO"))
+                {
+                    if (t.End <= position) start = t.End;
+                    else { end = t.IsP(";") ? t.End : t.Start; return; }
+                    depth = 0; // an unbalanced "(" does not leak into the next statement
+                }
+                else if (t.IsP("(")) depth++;
+                else if (t.IsP(")") && depth > 0) depth--;
+                blank = blankBefore = false;
+                last = t;
+            }
+            if (blankBefore && ended()) start = Math.Min(position, end); // on an empty line at the end of the script
+        }
+
+        /// <summary>Off: only ";" and GO end a statement (Tools > Options > SQLFinish).</summary>
+        public static bool BlankLineEndsStatement = true;
+
+        static int Newlines(string s, int length)
+        {
+            int n = 0;
+            for (int i = 0; i < length; i++) if (s[i] == '\n') n++;
+            return n;
+        }
+
         /// <summary>Advances past the closing quote (a doubled quote is an escape). False if unterminated.</summary>
         static bool ScanQuoted(string s, ref int i, char close)
         {

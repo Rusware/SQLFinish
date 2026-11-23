@@ -35,6 +35,28 @@ namespace SQLFinish.Engine
         static readonly DateTime FirstDate = new DateTime(1900, 3, 1); // earlier days are off by one in Excel (it believes 1900 was a leap year), or do not exist
         static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
+        /// <summary>
+        /// A new name in <paramref name="folder"/> for a workbook that is only there to be opened in Excel.
+        /// Earlier ones are cleared out once they are a week old (those still open in Excel stay).
+        /// </summary>
+        public static string ScratchFile(string folder, string name, DateTime now)
+        {
+            Directory.CreateDirectory(folder);
+            foreach (var old in Directory.GetFiles(folder, "*.xlsx"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTime(old) > now.AddDays(-7)) continue;
+                    File.SetAttributes(old, FileAttributes.Normal); // they are written read-only
+                    File.Delete(old);
+                }
+                catch (IOException) { }                 // open in Excel
+                catch (UnauthorizedAccessException) { } // not ours to delete
+            }
+            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return Path.Combine(folder, name + " " + now.ToString("yyyy-MM-dd HHmmss", Invariant) + ".xlsx");
+        }
+
         /// <summary>The Excel number format for a SQL Server type, or null where Excel's General format is right.</summary>
         public static string Format(string sqlType, int scale)
         {

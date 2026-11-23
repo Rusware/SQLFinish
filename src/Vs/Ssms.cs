@@ -87,20 +87,200 @@ namespace SQLFinish.Vs
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern IntPtr GetFocus();
 
-        /// <summary>
-        /// The result set of the results grid that has the keyboard focus (the one that was right-clicked),
-        /// or null when the focus is anywhere else. SSMS finds the grid for its own "Save Results As" the
-        /// same way. UI thread only.
-        /// </summary>
-        public static ResultGrid FocusedResults()
+        static object GridStorage(System.Windows.Forms.Control control) => control.GetType().GetProperty("GridStorage")?.GetValue(control);
+
+        // Other grids (client statistics, template parameters) have a storage that is not a result set.
+        static Type ResultSet(object storage) => storage?.GetType().GetInterface("Microsoft.SqlServer.Management.QueryExecution.IGridResultSet");
+
+        static IEnumerable<System.Windows.Forms.Control> Descendants(System.Windows.Forms.Control control)
         {
+            foreach (System.Windows.Forms.Control child in control.Controls)
+            {
+                yield return child;
+                foreach (var below in Descendants(child)) yield return below;
+            }
+        }
+
+        /// <summary>
+        /// The storage of the results grid that has the keyboard focus (the one that was right-clicked;
+        /// SSMS finds the grid for its own "Save Results As" the same way). With the focus elsewhere in a
+        /// query window, as when the shortcut or the toolbar is used while typing, that window's first
+        /// results grid. Null when there is neither.
+        /// </summary>
+        static object ResultStorage()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var focus = System.Windows.Forms.Control.FromChildHandle(GetFocus());
+            object storage = null;
+            for (var control = focus; control != null && storage == null; control = control.Parent)
+                storage = GridStorage(control);
+            // Not in a grid: look around the focus, nearest container first, so only its own window's grids are found.
+            if (storage == null)
+                for (var control = focus; control != null && storage == null; control = control.Parent)
+                    storage = Descendants(control).Select(GridStorage).FirstOrDefault(s => ResultSet(s) != null);
+            // The focus is in none of SSMS's own controls (a menu is open, say): the active query window's first grid.
+            if (focus == null && ActiveDocumentView() is System.Windows.Forms.Control window)
+                storage = Descendants(window).Select(GridStorage).FirstOrDefault(s => ResultSet(s) != null);
+            return ResultSet(storage) == null ? null : storage;
+        }
+
+        /// <summary>The active document window's own control (for a query window, SSMS's editor-and-results control), or null.</summary>
+        static object ActiveDocumentView()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            object frame = null, view = null;
+            (Package.GetGlobalService(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection)?.GetCurrentElementValue((uint)Microsoft.VisualStudio.VSConstants.VSSELELEMID.SEID_DocumentFrame, out frame);
+            (frame as IVsWindowFrame)?.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out view);
+            return view;
+        }
+
+        /// <summary>
+        /// How SSMS itself writes down a query window's connection (server, database, kind of login and user
+        /// name; never a password), or "" for a window that has none. <paramref name="window"/> is the
+        /// window's own control.
+        /// </summary>
+        public static string ConnectionOf(object window)
+        {
+            object info = window.GetType().GetProperty("Connection")?.GetValue(window);
+            if (info == null) return "";
+            var text = new System.Text.StringBuilder();
+            using (var writer = System.Xml.XmlWriter.Create(text, new System.Xml.XmlWriterSettings { OmitXmlDeclaration = true }))
+                info.GetType().GetMethod("SaveToStream").Invoke(info, new object[] { writer, true });
+            return text.ToString();
+        }
+
+        /// <summary>SSMS's own way of making query windows, and the type it describes a connection with.</summary>
+        static object ScriptFactory(out MethodInfo createNewScript, out Type connectionInfo)
+        {
+            var factoryProperty = FindType("SqlPackageBase", "Microsoft.SqlServer.Management.UI.VSIntegration.ServiceCache")
+                .GetProperty("ScriptFactory", BindingFlags.Public | BindingFlags.Static);
+            createNewScript = factoryProperty.PropertyType.GetMethods().First(m => m.Name == "CreateNewScript" && m.GetParameters().Length == 3
+                && m.GetParameters()[1].ParameterType.Name == "UIConnectionInfo");
+            connectionInfo = createNewScript.GetParameters()[1].ParameterType;
+            return factoryProperty.GetValue(null) ?? throw new InvalidOperationException("SSMS has no script factory yet");
+        }
+
+        /// <summary>Opens a new, unsaved query window holding a copy of <paramref name="file"/>.</summary>
+        public static void NewQueryFrom(string file)
+        {
+            object factory = ScriptFactory(out var create, out _);
+            create.Invoke(factory, new object[] { file, null, null });
+        }
+
+        /// <summary>
+        /// Runs <paramref name="open"/>, which opens one query window, and gives that window the
+        /// <paramref name="connection"/> written down by <see cref="ConnectionOf"/>. SSMS then connects as it
+        /// does for any window it opens with a known connection: silently where no password is needed, else
+        /// through its own dialog, filled in. With "" the window is left unconnected and nothing is asked.
+        /// <paramref name="logins"/> carries what one window learnt to the next (keep one for a run of
+        /// windows): a password typed for the first window on a server is not asked for again by the others,
+        /// and a server that did not answer is not waited for again.
+        /// </summary>
+        public static void OpenQuery(string connection, Action open, Dictionary<string, object> logins)
+        {
+            const BindingFlags any = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+            Func<object, string, object> get = (target, property) => target.GetType().GetProperty(property, any)?.GetValue(target);
+            object info = null;
+            string login = null;
             try
             {
-                object storage = null;
-                for (var control = System.Windows.Forms.Control.FromChildHandle(GetFocus()); control != null && storage == null; control = control.Parent)
-                    storage = control.GetType().GetProperty("GridStorage")?.GetValue(control);
-                // Other grids (client statistics, template parameters) have a storage that is not a result set.
-                var results = storage?.GetType().GetInterface("Microsoft.SqlServer.Management.QueryExecution.IGridResultSet");
+                if (connection.Length > 0)
+                {
+                    ScriptFactory(out _, out var infoType);
+                    using (var reader = System.Xml.XmlReader.Create(new System.IO.StringReader(connection)))
+                    {
+                        reader.MoveToContent();
+                        info = infoType.GetMethod("LoadFromStream").Invoke(null, new object[] { reader });
+                    }
+                    login = get(info, "ServerName") + "\n" + get(info, "AuthenticationType") + "\n" + get(info, "UserName");
+                    if (logins.TryGetValue(login, out object password))
+                    {
+                        if (password == null) info = null; // it did not connect a moment ago
+                        else info.GetType().GetProperty("InMemoryPassword")?.SetValue(info, password);
+                    }
+                }
+            }
+            catch (Exception x)
+            {
+                info = null;
+                Append("ERROR could not read a reopened window's connection: " + x); // it comes back unconnected
+            }
+
+            // SSMS connects a new window by itself as the window is created; the only moment to tell it which
+            // connection, or not to, is its own (internal) announcement of the new editor, just before that.
+            object editor = null;
+            EventHandler prepare = (sender, e) =>
+            {
+                try
+                {
+                    editor = get(e, "NewEditor");
+                    if (editor == null) return;
+                    if (info == null) editor.GetType().GetProperty("AutoConnect", any)?.SetValue(editor, false);
+                    else editor.GetType().GetMethod("SetConnection", new[] { info.GetType() }).Invoke(editor, new[] { info });
+                }
+                catch (Exception x)
+                {
+                    Append("ERROR could not give a reopened window its connection: " + x); // SSMS asks for one instead
+                }
+            };
+            Delegate handler = null;
+            EventInfo created = null;
+            try
+            {
+                created = FindType("SQLEditors", "Microsoft.SqlServer.Management.UI.VSIntegration.Editors.ScriptEditorControl")
+                    .GetEvent("NewScriptEditor", BindingFlags.NonPublic | BindingFlags.Static);
+                handler = Delegate.CreateDelegate(created.EventHandlerType, prepare.Target, prepare.Method);
+                created.GetAddMethod(true).Invoke(null, new object[] { handler });
+            }
+            catch (Exception x)
+            {
+                handler = null;
+                Append("ERROR could not reach SSMS's new query windows: " + x); // the window still opens; SSMS asks for its connection
+            }
+            try
+            {
+                open();
+            }
+            finally
+            {
+                if (handler != null) created.GetRemoveMethod(true).Invoke(null, new object[] { handler });
+            }
+            if (info == null || editor == null) return; // nothing to connect, or nothing known about how it went
+            try
+            {
+                if (get(editor, "IsConnected") as bool? == false) logins[login] = null;
+                // SSMS's own SecureString, held only until the windows are open
+                else if (get(editor, "Connection") is object live && get(live, "InMemoryPassword") is object typed) logins[login] = typed;
+            }
+            catch (Exception x)
+            {
+                Append("ERROR could not tell whether a reopened window connected: " + x);
+            }
+        }
+
+        /// <summary>True when <see cref="Results"/> would find a grid with rows. Cheap: the shell asks often. UI thread only.</summary>
+        public static bool HasResults()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                object storage = ResultStorage();
+                return storage != null && (long)storage.GetType().GetMethod("NumRows", Type.EmptyTypes).Invoke(storage, null) > 0;
+            }
+            catch (Exception)
+            {
+                return false; // said properly, once, when the export itself is tried
+            }
+        }
+
+        /// <summary>The rows of the grid found by <see cref="ResultStorage"/>, or null. UI thread only.</summary>
+        public static ResultGrid Results()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                object storage = ResultStorage();
+                var results = ResultSet(storage);
                 if (results == null) return null;
 
                 var type = storage.GetType();

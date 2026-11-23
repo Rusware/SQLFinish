@@ -34,6 +34,7 @@ static class Program
         FormatterChecks();
         CompletionChecks();
         XlsxChecks();
+        SessionChecks();
         LiveCatalogCheck();
         Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
@@ -214,6 +215,32 @@ END",
         items = At("SELECT 1; SELECT | FROM Customers", out c);
         Check(find(items, "Name") != null && find(items, "Total") == null, "statements are scoped by ;");
 
+        // a forgotten ";" is forgiven: a blank line starts a new statement too
+        items = At("SELECT * FROM Orders o\n\nSELECT | FROM Customers", out c);
+        Check(find(items, "Name") != null && find(items, "Total") == null && find(items, "o.Total") == null, "a blank line scopes the statement after it");
+        items = At("SELECT | FROM Orders\r\n  \r\nSELECT * FROM Customers c", out c);
+        Check(find(items, "Total") != null && find(items, "c.Name") == null && find(items, "Name") == null, "and the statement before it");
+        items = At("SELECT * FROM Orders o\n\nss|", out c);
+        Check(c.Mode == Mode.StatementStart && find(items, "ssf") != null, "typing after a blank line starts a statement");
+        At("SELECT * FROM Orders o\n\n|", out c);
+        Check(c.Mode == Mode.StatementStart && !c.OnSpace, "an empty line after a blank line is a statement start");
+        At("SELECT * FROM Orders o\n-- note\n\n|\n\nSELECT 2", out c);
+        Check(c.Mode == Mode.StatementStart, "also between two statements, after a comment");
+        At("SELECT * FROM Orders o\n|", out c);
+        Check(c.Mode == Mode.AfterOperand, "the very next line still continues the statement");
+        items = At("SELECT o.Id\n\nFROM Orders o\n\nWHERE |", out c);
+        Check(find(items, "Total") != null, "a blank line before the next clause is not the end");
+        items = At("SELECT\n    o.Id,\n\n    | c.Name\nFROM Orders o JOIN Customers c ON c.Id = o.CustomerId", out c);
+        Check(find(items, "o.Total") != null && find(items, "c.Name") != null, "nor is one after a comma");
+        items = At("SELECT * FROM Orders o WHERE o.Id IN (\n\nSELECT | FROM Customers c\n\n)", out c);
+        Check(find(items, "o.Total") != null && find(items, "c.Name") != null, "nor one inside parentheses");
+        Tokenizer.BlankLineEndsStatement = false;
+        items = At("SELECT * FROM Orders o\n\nSELECT | FROM Customers c", out c);
+        Check(find(items, "o.Total") != null, "blank lines mean nothing when the option is off");
+        Tokenizer.BlankLineEndsStatement = true;
+        Same("select a,b from t\n\nSELECT\n    a,\n    b\nFROM u\n\nselect 3",
+            Formatter.FormatStatementAt("select a,b from t\n\nselect a,b from u\n\nselect 3", 22), "only the statement between the blank lines is formatted");
+
         // a column comes next, so the list opens on the space, as it does for tables after FROM
         foreach (var clause in new[] { "ORDER BY", "GROUP BY", "WHERE", "WHERE o.Id = 1 AND", "WHERE o.Id = 1 OR", "GROUP BY o.Id HAVING" })
         {
@@ -338,6 +365,20 @@ END",
             History.Save(folder, new HistoryEntry { When = t0.AddSeconds(9), Server = @"(localdb)\X", Database = "Shop", Sql = odd }, 3);
             var newest = History.Load(folder)[0];
             Check(newest.Sql == odd && newest.Server == @"(localdb)\X" && newest.Database == "Shop", "history: the script is kept exactly");
+
+            // pinned scripts outlive pruning; deleting forgets one script
+            History.SetPinned(newest, true);
+            for (int i = 20; i <= 24; i++)
+                History.Save(folder, new HistoryEntry { When = t0.AddSeconds(i), Server = "s", Sql = "SELECT " + i }, 3);
+            loaded = History.Load(folder);
+            Check(string.Join(",", loaded.Select(h => (h.Pinned ? "*" : "") + h.Sql.Trim().Split('\n').Last())) == "SELECT 24,SELECT 23,SELECT 22,*GO", "history: a pinned script is kept beyond the limit, and not counted in it");
+            var pinned = loaded.Single(h => h.Pinned);
+            Check(pinned.Sql == odd && pinned.When == t0.AddSeconds(9), "history: pinning changes nothing but the pin");
+            History.SetPinned(pinned, false);
+            History.Delete(loaded[0]);
+            Check(string.Join(",", History.Load(folder).Select(h => (h.Pinned ? "*" : "") + h.Sql.Trim().Split('\n').Last())) == "SELECT 23,SELECT 22,GO", "history: unpinned and deleted");
+            History.Save(folder, new HistoryEntry { When = t0.AddSeconds(30), Server = "s", Sql = "SELECT 30" }, 3);
+            Check(History.Load(folder).Count == 3 && History.Load(folder).All(h => h.Sql != odd), "history: an unpinned script is pruned like any other");
         }
         finally
         {
@@ -432,8 +473,77 @@ END",
         Check(has(cellText("F3") + "1850-01-02</t>"), "xlsx: a date before 1900 is text");
         Check(has(cellText("J3") + new string('x', Xlsx.MaxCellChars) + "</t>"), "xlsx: text is cut at Excel's cell limit");
 
-        Check(Xlsx.Format("DECIMAL", 0) == "0" && Xlsx.Format("numeric", 4) == "0.0000" && Xlsx.Format("datetime2", 0) == "yyyy-mm-dd hh:mm:ss" && Xlsx.Format("time", 0) == "hh:mm:ss", "xlsx: formats follow the scale");
+        // a workbook that is only there to be opened in Excel
+        string scratch = Path.Combine(Path.GetTempPath(), "SQLFinishCheck-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var now = new DateTime(2026, 11, 23, 11, 37, 5);
+            Directory.CreateDirectory(scratch);
+            string stale = Path.Combine(scratch, "old.xlsx"), recent = Path.Combine(scratch, "recent.xlsx");
+            File.WriteAllText(stale, "x");
+            File.WriteAllText(recent, "x");
+            File.SetLastWriteTime(stale, now.AddDays(-8));
+            File.SetLastWriteTime(recent, now.AddDays(-1));
+            File.SetAttributes(stale, FileAttributes.ReadOnly);
+            Check(Xlsx.ScratchFile(scratch, "a<b>:c", now) == Path.Combine(scratch, "a_b__c 2026-11-23 113705.xlsx"), "xlsx: the temporary workbook is named for the window and the time");
+            Check(!File.Exists(stale) && File.Exists(recent), "xlsx: temporary workbooks a week old are cleared out, read-only or not");
+        }
+        finally
+        {
+            if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
+        }
+
+        Check(Xlsx.Format("DECIMAL", 0) == "0"&& Xlsx.Format("numeric", 4) == "0.0000" && Xlsx.Format("datetime2", 0) == "yyyy-mm-dd hh:mm:ss" && Xlsx.Format("time", 0) == "hh:mm:ss", "xlsx: formats follow the scale");
         Check(Xlsx.Format("nvarchar", 0) == null && Xlsx.Format("uniqueidentifier", 0) == null && Xlsx.Format(null, 0) == null, "xlsx: other types are left as General");
+    }
+
+    /// <summary>The open query windows are noted, forgotten only when closed on purpose, and found again by the next start.</summary>
+    static void SessionChecks()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "SQLFinishCheck-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var started = new DateTime(2026, 11, 23, 9, 0, 0);
+            var t = started.AddHours(1);
+            string mine = Path.Combine(root, "111-" + started.Ticks);
+            Func<string, string, SessionWindow, KeyValuePair<string, SessionWindow>> window = (key, text, w) => { w.Text = text; return new KeyValuePair<string, SessionWindow>(key, w); };
+            Func<int, DateTime?> running = id => id == 111 ? started : (DateTime?)null, nothingRunning = id => null;
+            Check(Session.Abandoned(root, nothingRunning).Count == 0, "session: nothing to reopen before anything was noted");
+
+            var session = new Session(root, 111, started);
+            string odd = "select 'tab\there'\r\n\r\n-- caf\u00e9\r\n";
+            session.Save(new[] { window("a", odd, new SessionWindow { Connection = "<c>1</c>", Active = true }), window("b", "B", new SessionWindow { Path = @"C:\q\b.sql" }) }, t);
+            Check(File.ReadAllText(Path.Combine(mine, "0000.sql")) == odd && File.ReadAllText(Path.Combine(mine, "0001.sql")) == "B", "session: each window's text is kept exactly");
+            session.Save(new[] { window("a", null, new SessionWindow { Connection = "<c>1</c>", Active = true }) }, t.AddSeconds(10));
+            Check(File.ReadAllText(Path.Combine(mine, "0000.sql")) == odd && File.Exists(Path.Combine(mine, "0001.sql")), "session: unchanged text is left alone, and a window just closed is not forgotten yet");
+            Check(Session.Abandoned(root, running).Count == 0, "session: a running SSMS's windows are not up for reopening");
+
+            // SSMS ends here, seconds after window b went: both come back
+            var abandoned = Session.Abandoned(root, nothingRunning);
+            Check(abandoned.Count == 1 && abandoned[0] == mine, "session: found once its SSMS is gone");
+            Check(Session.Abandoned(root, id => started.AddSeconds(5)).Count == 1, "session: a new process with the old one's id is not mistaken for it");
+            var loaded = Session.Load(mine);
+            Check(loaded.Count == 2 && loaded[0].Active && loaded[0].Connection == "<c>1</c>" && loaded[0].Path == "" && File.ReadAllText(loaded[0].TextFile) == odd
+                && !loaded[1].Active && loaded[1].Path == @"C:\q\b.sql" && loaded[1].Connection == "", "session: windows load in order with their file, connection and text");
+
+            // had SSMS lived on instead, the closed window would be forgotten, and a changed one rewritten
+            session.Save(new[] { window("a", "A2", new SessionWindow()) }, t.AddSeconds(45));
+            loaded = Session.Load(mine);
+            Check(loaded.Count == 1 && File.ReadAllText(loaded[0].TextFile) == "A2" && !loaded[0].Active && loaded[0].Connection == "", "session: a window that stays closed is forgotten; changes are noted");
+            session.Save(new[] { window("c", "C", new SessionWindow()) }, t.AddSeconds(50));
+            Check(Session.Load(mine).Count == 2 && File.Exists(Path.Combine(mine, "0002.sql")), "session: a new window never takes over a closed one's files");
+
+            string claimed = Session.Claim(mine);
+            Check(Session.Load(claimed).Count == 2 && !Directory.Exists(mine), "session: claimed for reopening");
+            bool second = false;
+            try { Session.Claim(mine); second = true; } catch (IOException) { }
+            Check(!second, "session: a session is claimed only once");
+            Check(Session.Abandoned(root, nothingRunning).Count == 0 && Directory.Exists(mine + ".failed") && !Directory.Exists(claimed), "session: one that never finished reopening is set aside, not retried");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     /// <summary>Runs the real catalog query against LocalDB, if there is one.</summary>

@@ -12,7 +12,7 @@ namespace SQLFinish.Engine
     /// </summary>
     public static class Formatter
     {
-        // ponytail: fixed style (4 spaces, UPPER keywords, trailing commas). Add an options page when someone wants another style.
+        // ponytail: fixed style (4 spaces, UPPER keywords, trailing commas). Add it to the options page when someone wants another style.
         const string IndentUnit = "    ";
 
         enum LevelKind { Top, Sub, Inline, Cols }
@@ -345,18 +345,12 @@ namespace SQLFinish.Engine
         }
 
         /// <summary>
-        /// Formats only the statement around <paramref name="position"/> (statements are separated by ";" and GO)
+        /// Formats only the statement around <paramref name="position"/> (see <see cref="Tokenizer.StatementAt"/>)
         /// and returns the whole script. A statement that sits indented keeps that indentation on every line.
         /// </summary>
         public static string FormatStatementAt(string sql, int position)
         {
-            int start = 0, end = sql.Length;
-            foreach (var t in Tokenizer.Scan(sql))
-            {
-                if (!t.IsP(";") && !t.Is("GO")) continue;
-                if (t.End <= position) start = t.End;
-                else { end = t.IsP(";") ? t.End : t.Start; break; }
-            }
+            Tokenizer.StatementAt(Tokenizer.Scan(sql), position, out int start, out int end);
             while (start < end && char.IsWhiteSpace(sql[start])) start++;
             while (end > start && char.IsWhiteSpace(sql[end - 1])) end--;
             if (start == end) return sql;

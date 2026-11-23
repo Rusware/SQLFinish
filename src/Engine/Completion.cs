@@ -89,17 +89,8 @@ namespace SQLFinish.Engine
                 ctx.PrefixStart = word.Start;
             }
 
-            // ponytail: statements are split on ";" and GO only, so unterminated neighbours share one scope.
-            // Split on statement keywords too if cross-statement aliases ever leak into suggestions.
-            int first = 0, last = code.Count;
-            for (int i = 0; i < code.Count; i++)
-            {
-                bool separator = code[i].IsP(";") || code[i].Is("GO");
-                if (!separator) continue;
-                if (code[i].End <= ctx.PrefixStart) first = i + 1;
-                else { last = i; break; }
-            }
-            var stmt = code.GetRange(first, last - first).Where(t => t != word).ToList();
+            Tokenizer.StatementAt(all, ctx.PrefixStart, out int first, out int last);
+            var stmt = code.Where(t => t != word && t.Start >= first && t.End <= last && !t.IsP(";")).ToList();
             var before = stmt.Where(t => t.End <= ctx.PrefixStart).ToList();
             ctx.Before = before;
 

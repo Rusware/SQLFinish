@@ -18,8 +18,9 @@ namespace SQLFinish.Vs
 {
     /// <summary>Hosts the SQLFinish menu. Completion needs no package: it is a MEF part (CompletionSource.cs).</summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("SQLFinish", "SQL completion, formatting and snippets for SQL Server Management Studio.", "1.6.0")]
+    [InstalledProductRegistration("SQLFinish", "SQL completion, formatting and snippets for SQL Server Management Studio.", "1.9.0")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
+    [ProvideOptionPage(typeof(OptionsPage), "SQLFinish", "General", 0, 0, true)]
     [ProvideAutoLoad(VSConstants.UICONTEXT.ShellInitialized_string, PackageAutoLoadFlags.BackgroundLoad)] // the Execute guard must be in place before the first query runs
     [Guid(PackageGuid)]
     public sealed class SqlFinishPackage : AsyncPackage
@@ -30,12 +31,23 @@ namespace SQLFinish.Vs
         const int FormatCommand = 0x0100, RefreshCommand = 0x0101, PickColumnsCommand = 0x0102, HistoryCommand = 0x0103, DefinitionCommand = 0x0104, ExportCommand = 0x0105;
         EnvDTE.CommandEvents executeEvents; // held so the event subscription stays alive
         string lastRemembered;              // so pressing F5 again on the same script adds nothing to the history
+        OptionsPage Options => (OptionsPage)GetDialogPage(typeof(OptionsPage));
+        SessionKeeper session;              // remembers the open query windows for the next start
+
+        /// <summary>SSMS is about to close: note the query windows as they are now, while they are still open.</summary>
+        protected override int QueryClose(out bool canClose)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            session?.Capture();
+            return base.QueryClose(out canClose);
+        }
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             var commands = (IMenuCommandService)await GetServiceAsync(typeof(IMenuCommandService));
             if (commands == null) return;
+            Options.LoadSettingsFromStorage(); // read the saved options now, not when the page is first opened: one of them lives in the engine
             commands.AddCommand(new MenuCommand((s, e) => Format(), new CommandID(CommandSet, FormatCommand)));
             commands.AddCommand(new MenuCommand((s, e) =>
             {
@@ -55,10 +67,12 @@ namespace SQLFinish.Vs
                 Status("SQLFinish: suggestions will be reloaded from the database.");
             }, new CommandID(CommandSet, RefreshCommand)));
 
-            // Shown in the results grid's own right-click menu, under "Save Results As...", while a grid with rows has the focus.
+            // On the toolbar, in the results grid's own right-click menu under "Save Results As...", and on its shortcut:
+            // enabled while the query window with the focus has a grid with rows.
             var export = new OleMenuCommand((s, e) => ExportToExcel(), new CommandID(CommandSet, ExportCommand));
-            export.BeforeQueryStatus += (s, e) => export.Visible = export.Enabled = Ssms.FocusedResults()?.Rows > 0;
+            export.BeforeQueryStatus += (s, e) => export.Enabled = Ssms.HasResults();
             commands.AddCommand(export);
+            session = new SessionKeeper(this, () => Options.ReopenWindows);
 
             try
             {
@@ -83,7 +97,8 @@ namespace SQLFinish.Vs
                 if (view == null || !view.TextBuffer.ContentType.IsOfType("SQL")) return;
                 string sql = view.TextBuffer.CurrentSnapshot.GetText(ScriptSpan(view)); // what SSMS will run: the selection, else everything
 
-                var unfiltered = Guard.Unfiltered(sql);
+                var options = Options;
+                var unfiltered = options.ExecuteGuard ? Guard.Unfiltered(sql) : new System.Collections.Generic.List<string>();
                 if (unfiltered.Count > 0)
                 {
                     int answer = VsShellUtilities.ShowMessageBox(this,
@@ -97,7 +112,7 @@ namespace SQLFinish.Vs
                     }
                 }
                 if (Guard.ChangesSchema(sql)) SchemaCache.ClearForSchemaChange();
-                Remember(sql);
+                if (options.RememberScripts) Remember(sql, options.ScriptsKept);
             }
             catch (Exception e)
             {
@@ -155,29 +170,47 @@ namespace SQLFinish.Vs
         }
 
         /// <summary>
-        /// Saves the results grid that has the focus as an Excel workbook and opens it. The whole grid is
-        /// written, as "Save Results As" does, whatever is selected in it.
+        /// Opens the results grid that has the focus (from the editor: the window's first grid) in Excel, as a
+        /// workbook in the temp folder that Excel will ask to save under a name of your choosing. With the
+        /// "Ask where to save" option the file is chosen first instead. The whole grid is written, as
+        /// "Save Results As" does, whatever is selected in it.
         /// </summary>
         void ExportToExcel()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var grid = Ssms.FocusedResults();
+            var grid = Ssms.Results();
             if (grid == null || grid.Rows == 0 || !grid.Complete)
             {
                 Status(grid != null && !grid.Complete ? "SQLFinish: wait for the query to finish, then export." : "SQLFinish: click in a results grid with rows first.");
                 return;
             }
+            // Named for the query window's tab ("SQLQuery1"): an unsaved query's own file name is a meaningless temp name.
             string name = null;
-            try { name = Path.GetFileNameWithoutExtension(((EnvDTE.DTE)GetService(typeof(EnvDTE.DTE)))?.ActiveDocument?.Name); }
-            catch (COMException) { } // no document to name the file after
-            var dialog = new Microsoft.Win32.SaveFileDialog
+            try
             {
-                Title = "Export to Excel", Filter = "Excel workbook (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
-                FileName = string.IsNullOrEmpty(name) ? "Results" : name,
-            };
-            if (dialog.ShowDialog() != true) return;
-            string path = dialog.FileName;
-            Status("SQLFinish: exporting " + grid.Rows.ToString("N0") + " rows to " + path + "...");
+                string caption = ((EnvDTE.DTE)GetService(typeof(EnvDTE.DTE)))?.ActiveDocument?.ActiveWindow?.Caption ?? "";
+                int end = caption.IndexOf(" - ", StringComparison.Ordinal);
+                name = Path.GetFileNameWithoutExtension(end < 0 ? caption : caption.Substring(0, end)).Trim();
+            }
+            catch (Exception e) when (e is COMException || e is ArgumentException) { } // no document, or a caption that is no file name
+            if (string.IsNullOrEmpty(name)) name = "Results";
+            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            bool scratch = !Options.AskWhereToSave;
+            string path;
+            if (scratch)
+            {
+                path = Xlsx.ScratchFile(Path.Combine(Path.GetTempPath(), "SQLFinish"), name, DateTime.Now);
+            }
+            else
+            {
+                var dialog = new Microsoft.Win32.SaveFileDialog
+                {
+                    Title = "Export to Excel", Filter = "Excel workbook (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true, FileName = name,
+                };
+                if (dialog.ShowDialog() != true) return;
+                path = dialog.FileName;
+            }
+            Status("SQLFinish: exporting " + grid.Rows.ToString("N0") + " rows" + (scratch ? "" : " to " + path) + "...");
 #pragma warning disable VSSDK007 // fire and forget: a large grid is written off the UI thread so SSMS stays usable
             JoinableTaskFactory.RunAsync(async () =>
             {
@@ -195,6 +228,8 @@ namespace SQLFinish.Vs
                             using (var file = File.Create(temp)) written = Xlsx.Write(file, grid.Columns, grid.Rows, grid.Value, grid.Text, out truncated);
                             File.Delete(path);
                             File.Move(temp, path);
+                            // Read-only, so that Save in Excel asks for a real place instead of quietly keeping the work in the temp folder.
+                            if (scratch) File.SetAttributes(path, FileAttributes.ReadOnly);
                             return written;
                         }
                         finally
@@ -213,7 +248,8 @@ namespace SQLFinish.Vs
                 }
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
                 Status("SQLFinish: exported " + (rows < grid.Rows ? "the first " + rows.ToString("N0") + " of " + grid.Rows.ToString("N0") + " rows (Excel's limit)" : rows.ToString("N0") + " rows")
-                    + " to " + path + (truncated > 0 ? "; " + truncated.ToString("N0") + " cells were cut at Excel's limit of 32,767 characters." : "."));
+                    + (scratch ? " to Excel (a temporary copy, " + path + ": save it from Excel to keep it)" : " to " + path)
+                    + (truncated > 0 ? "; " + truncated.ToString("N0") + " cells were cut at Excel's limit of 32,767 characters." : "."));
                 try { System.Diagnostics.Process.Start(path); }
                 catch (System.ComponentModel.Win32Exception) { } // nothing installed opens .xlsx: the status bar says where the file is
             }).FileAndForget("SQLFinish/ExportToExcel");
@@ -241,14 +277,14 @@ namespace SQLFinish.Vs
         }
 
         /// <summary>Adds a script that is about to run to the history.</summary>
-        void Remember(string sql)
+        void Remember(string sql, int keep)
         {
             // ponytail: scripts over a million characters (bulk data loads) are not kept; writing them would stall F5.
             if (sql.Trim().Length == 0 || sql.Length > 1000000 || sql == lastRemembered) return;
             try
             {
                 var connection = Ssms.ActiveConnection();
-                History.Save(History.Folder, new HistoryEntry { When = DateTime.Now, Server = connection?.Server, Database = connection?.Database, Sql = sql });
+                History.Save(History.Folder, new HistoryEntry { When = DateTime.Now, Server = connection?.Server, Database = connection?.Database, Sql = sql }, keep);
                 lastRemembered = sql;
             }
             catch (Exception e)

@@ -2,12 +2,21 @@
 <CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
   <Extern href="stdidcmd.h" />
   <Extern href="vsshlids.h" />
+  <Include href="KnownImageIds.vsct" />
 
   <Commands package="guidPackage">
     <Menus>
       <!-- Tools > SQLFinish. Not a top-level menu: the shell moves those under Extensions, and SSMS 22 then never shows them. -->
       <Menu guid="guidCommandSet" id="TopMenu" priority="0x0100" type="Menu">
         <Parent guid="guidCommandSet" id="ToolsGroup" />
+        <Strings>
+          <ButtonText>SQLFinish</ButtonText>
+          <CommandName>SQLFinish</CommandName>
+        </Strings>
+      </Menu>
+      <!-- Shown while a query window is active, as SSMS's own SQL Editor toolbar is. Any toolbar can be switched on and off by right-clicking the toolbar area. -->
+      <Menu guid="guidCommandSet" id="Toolbar" priority="0x0002" type="Toolbar">
+        <CommandFlag>DefaultDocked</CommandFlag>
         <Strings>
           <ButtonText>SQLFinish</ButtonText>
           <CommandName>SQLFinish</CommandName>
@@ -22,11 +31,16 @@
       <Group guid="guidCommandSet" id="TopGroup" priority="0x0600">
         <Parent guid="guidCommandSet" id="TopMenu" />
       </Group>
+      <Group guid="guidCommandSet" id="ToolbarGroup" priority="0x0100">
+        <Parent guid="guidCommandSet" id="Toolbar" />
+      </Group>
     </Groups>
 
     <Buttons>
       <Button guid="guidCommandSet" id="cmdFormat" priority="0x0100" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="FormatDocument" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>Format SQL</ButtonText>
           <LocCanonicalName>SQLFinish.FormatSQL</LocCanonicalName>
@@ -34,6 +48,8 @@
       </Button>
       <Button guid="guidCommandSet" id="cmdPickColumns" priority="0x0150" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="CheckBoxList" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>Pick Columns...</ButtonText>
           <LocCanonicalName>SQLFinish.PickColumns</LocCanonicalName>
@@ -41,6 +57,8 @@
       </Button>
       <Button guid="guidCommandSet" id="cmdHistory" priority="0x0180" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="History" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>Query History...</ButtonText>
           <LocCanonicalName>SQLFinish.QueryHistory</LocCanonicalName>
@@ -48,16 +66,18 @@
       </Button>
       <Button guid="guidCommandSet" id="cmdDefinition" priority="0x0190" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="GoToDefinition" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>Open Definition</ButtonText>
           <LocCanonicalName>SQLFinish.OpenDefinition</LocCanonicalName>
         </Strings>
       </Button>
-      <!-- In the results grid's right-click menu, straight after SSMS's own "Save Results As..." (priority 0x0100 in that group). -->
-      <Button guid="guidCommandSet" id="cmdExportExcel" priority="0x0101" type="Button">
-        <Parent guid="guidSqlEditorMenus" id="SaveResultsGroup" />
-        <CommandFlag>DynamicVisibility</CommandFlag>
-        <CommandFlag>DefaultInvisible</CommandFlag>
+      <!-- Also placed in the results grid's right-click menu: see CommandPlacements. Greyed out while there is nothing to export. -->
+      <Button guid="guidCommandSet" id="cmdExportExcel" priority="0x0195" type="Button">
+        <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="ExcelWorksheetView" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>E&amp;xport to Excel...</ButtonText>
           <LocCanonicalName>SQLFinish.ExportToExcel</LocCanonicalName>
@@ -65,6 +85,8 @@
       </Button>
       <Button guid="guidCommandSet" id="cmdRefresh" priority="0x0200" type="Button">
         <Parent guid="guidCommandSet" id="TopGroup" />
+        <Icon guid="ImageCatalogGuid" id="Refresh" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
         <Strings>
           <ButtonText>Refresh Suggestions</ButtonText>
           <LocCanonicalName>SQLFinish.RefreshSuggestions</LocCanonicalName>
@@ -73,11 +95,31 @@
     </Buttons>
   </Commands>
 
+  <CommandPlacements>
+    <!-- Straight after SSMS's own "Save Results As..." (priority 0x0100 in that group). -->
+    <CommandPlacement guid="guidCommandSet" id="cmdExportExcel" priority="0x0101">
+      <Parent guid="guidSqlEditorMenus" id="SaveResultsGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdFormat" priority="0x0100"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdPickColumns" priority="0x0150"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdHistory" priority="0x0180"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdDefinition" priority="0x0190"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdExportExcel" priority="0x0195"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+    <CommandPlacement guid="guidCommandSet" id="cmdRefresh" priority="0x0200"><Parent guid="guidCommandSet" id="ToolbarGroup" /></CommandPlacement>
+  </CommandPlacements>
+
+  <VisibilityConstraints>
+    <VisibilityItem guid="guidCommandSet" id="Toolbar" context="guidSqlEditor" />
+  </VisibilityConstraints>
+
   <KeyBindings>
     <!-- Rebind under Tools > Options > Environment > Keyboard; the commands are listed as Tools.FormatSQL and so on. -->
     <KeyBinding guid="guidCommandSet" id="cmdFormat" editor="guidVSStd97" key1="K" mod1="Control" key2="Y" mod2="Control" />
     <KeyBinding guid="guidCommandSet" id="cmdPickColumns" editor="guidVSStd97" key1="K" mod1="Control" key2="J" mod2="Control" />
     <KeyBinding guid="guidCommandSet" id="cmdHistory" editor="guidVSStd97" key1="K" mod1="Control" key2="Q" mod2="Control" />
+    <!-- Not Ctrl+K, Ctrl+E: the text editor binds that itself (code cleanup), and its scope beats a global binding. -->
+    <KeyBinding guid="guidCommandSet" id="cmdExportExcel" editor="guidVSStd97" key1="K" mod1="Control" key2="O" mod2="Control" />
+    <KeyBinding guid="guidCommandSet" id="cmdRefresh" editor="guidVSStd97" key1="K" mod1="Control" key2="R" mod2="Control" />
     <KeyBinding guid="guidCommandSet" id="cmdDefinition" editor="guidVSStd97" key1="VK_F12" /> <!-- SSMS 22 leaves F12 unbound -->
   </KeyBindings>
 
@@ -88,6 +130,8 @@
       <IDSymbol name="TopMenu" value="0x1000" />
       <IDSymbol name="TopGroup" value="0x1100" />
       <IDSymbol name="ToolsGroup" value="0x1200" />
+      <IDSymbol name="Toolbar" value="0x1300" />
+      <IDSymbol name="ToolbarGroup" value="0x1400" />
       <IDSymbol name="cmdFormat" value="0x0100" />
       <IDSymbol name="cmdRefresh" value="0x0101" />
       <IDSymbol name="cmdPickColumns" value="0x0102" />
@@ -96,6 +140,8 @@
       <IDSymbol name="cmdExportExcel" value="0x0105" />
     </GuidSymbol>
     <!-- SSMS's own SQL editor menus (SQLEditors.dll). Not a documented contract: if the group is ever renumbered the menu item is simply not shown. -->
+    <!-- The UI context that is active while a SQL query window is: SSMS shows its own SQL Editor toolbar on it. -->
+    <GuidSymbol name="guidSqlEditor" value="{b5a506eb-11be-4782-9a18-21265c2ca0b4}" />
     <GuidSymbol name="guidSqlEditorMenus" value="{33F13AC3-80BB-4ECB-85BC-225435603A5E}">
       <IDSymbol name="SaveResultsGroup" value="0x00B0" />
     </GuidSymbol>
